@@ -1,0 +1,24 @@
+database:
+  staging:
+    engine: postgres
+    host: "hostname"
+    port: "5432"
+    name: "postgres"
+    user: "user"
+    password: "password"
+    jump_host: "host"
+    jump_port: "22"
+    jump_user: "user"
+    jump_private_key: "/Users/example/.ssh/id_rsa"
+  
+  staging-mysql:
+    engine: mysql
+    host: "host"
+    port: "3306"
+    name: "mysql"
+    user: "user"
+    password: "password"
+    jump_host: "host"
+    jump_port: "22"
+    jump_user: "user"
+    jump_private_key: "/Users/user/.ssh/id_rsa"
