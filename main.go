@@ -11,6 +11,8 @@ import (
 	sshTunnel "github.com/elliotchance/sshtunnel"
 	"gopkg.in/yaml.v3"
 
+	"text/tabwriter"
+
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
 )
@@ -123,28 +125,43 @@ func execQuery(cfg DatabaseConfig, tunnelPort int, qry string) {
 	if err != nil {
 		log.Fatalf("Error getting column names: %v\n", err)
 	}
+	// Prepare to print results in a table
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.Debug)
+	defer w.Flush()
+
+	// Print column names
+	for _, col := range columns {
+		fmt.Fprintf(w, "%s\t", col)
+	}
+	fmt.Fprintln(w)
 
 	// Create a slice to store the values for each row
-	rawResult := make([][]byte, len(columns))
+	rawResult := make([]interface{}, len(columns))
 	dest := make([]interface{}, len(columns)) // Create a slice of interface{} to hold the pointers to each column value
 
 	for i := range rawResult {
 		dest[i] = &rawResult[i] // Assign the address of the slice element to the destination
 	}
 
-	// Iterate through the result set
+	// Iterate over result rows
 	for rows.Next() {
-		err = rows.Scan(dest...)
+		err := rows.Scan(dest...)
 		if err != nil {
-			log.Fatalf("Error scanning row: %v\n", err)
+			log.Fatal(err)
 		}
 
-		// Print raw output for each row
-		var row string
-		for _, raw := range rawResult {
-			row += string(raw) + "\t"
+		// Print each row
+		for _, val := range rawResult {
+			var v interface{}
+			b, ok := val.([]byte)
+			if ok {
+				v = string(b)
+			} else {
+				v = val
+			}
+			fmt.Fprintf(w, "%v\t", v)
 		}
-		fmt.Println(row)
+		fmt.Fprintln(w)
 	}
 	// Check for errors during rows iteration
 	if err := rows.Err(); err != nil {
