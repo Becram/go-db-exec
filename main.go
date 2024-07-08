@@ -38,6 +38,7 @@ func main() {
 	env := flag.String("env", "", "Environment to use")
 	query := flag.String("query", "SELECT * FROM pg_stat_activity WHERE state = 'active'", "Query to execute")
 	configFile := flag.String("config-file", "", "config file for the database credentials")
+	db := flag.String("database", "", "override the db-name from config file ")
 	flag.Parse()
 
 	// Read the YAML file
@@ -88,6 +89,11 @@ func main() {
 
 	go tunnel.Start()
 	time.Sleep(100 * time.Millisecond)
+	if *db != "" {
+		dbConfig.Name = *db
+	}
+
+	// Connect to the database
 
 	execQuery(dbConfig, tunnel.Local.Port, *query)
 
