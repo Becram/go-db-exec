@@ -53,6 +53,7 @@ func main() {
 	db := flag.String("database", "", "Override the db-name from config file")
 	maxWidth := flag.Int("max-width", 50, "Max display width per cell (0 = no truncation)")
 	slowThreshold := flag.Int("slow-threshold", 5, "Seconds threshold for slow-queries report")
+	timeout := flag.Int("timeout", 300, "Query timeout in seconds (default 300s for reports, use lower value for ad-hoc queries)")
 	flag.Parse()
 
 	if *showVersion {
@@ -110,18 +111,18 @@ func main() {
 	go tunnel.Serve(listener)
 	defer tunnel.Close()
 
-	conn := openDB(dbConfig, tunnelPort)
+	conn := openDB(dbConfig, tunnelPort, *timeout)
 	defer conn.Close()
 
 	if *report != "" {
-		runReport(conn, *report, *slowThreshold, *maxWidth)
+		runReport(conn, *report, *slowThreshold, *maxWidth, *timeout)
 	} else {
-		execQuery(conn, dbConfig.Engine, *query, *maxWidth)
+		execQuery(conn, dbConfig.Engine, *query, *maxWidth, *timeout)
 	}
 }
 
 // openDB opens and pings the database connection through the tunnel.
-func openDB(cfg DatabaseConfig, tunnelPort int) *sql.DB {
+func openDB(cfg DatabaseConfig, tunnelPort, timeout int) *sql.DB {
 	var connStr string
 	if cfg.Engine == "mysql" {
 		connStr = fmt.Sprintf("%s:%s@tcp(localhost:%d)/%s", cfg.User, cfg.Password, tunnelPort, cfg.Name)
@@ -134,7 +135,7 @@ func openDB(cfg DatabaseConfig, tunnelPort int) *sql.DB {
 		log.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	defer cancel()
 
 	if err = db.PingContext(ctx); err != nil {
@@ -282,7 +283,7 @@ func resolveReport(reportType string, slowThreshold int) ([]reportSection, error
 	return []reportSection{s}, nil
 }
 
-func runReport(db *sql.DB, reportType string, slowThreshold, maxWidth int) {
+func runReport(db *sql.DB, reportType string, slowThreshold, maxWidth, timeout int) {
 	sections, err := resolveReport(reportType, slowThreshold)
 	if err != nil {
 		log.Fatal(err)
@@ -293,7 +294,7 @@ func runReport(db *sql.DB, reportType string, slowThreshold, maxWidth int) {
 			fmt.Println()
 		}
 		fmt.Printf("\033[1;36m=== %s ===\033[0m\n", section.title)
-		printQueryResults(db, strings.TrimSpace(section.sql), maxWidth)
+		printQueryResults(db, strings.TrimSpace(section.sql), maxWidth, timeout)
 	}
 }
 
@@ -342,7 +343,7 @@ func translateMetaCommand(cmd, engine string) (string, error) {
 	}
 }
 
-func execQuery(db *sql.DB, engine, qry string, maxWidth int) {
+func execQuery(db *sql.DB, engine, qry string, maxWidth, timeout int) {
 	if strings.HasPrefix(qry, `\`) {
 		translated, err := translateMetaCommand(qry, engine)
 		if err != nil {
@@ -361,13 +362,13 @@ func execQuery(db *sql.DB, engine, qry string, maxWidth int) {
 		}
 	}
 
-	printQueryResults(db, qry, maxWidth)
+	printQueryResults(db, qry, maxWidth, timeout)
 }
 
 // --- Rendering -------------------------------------------------------------
 
-func printQueryResults(db *sql.DB, qry string, maxWidth int) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func printQueryResults(db *sql.DB, qry string, maxWidth, timeout int) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	defer cancel()
 
 	rows, err := db.QueryContext(ctx, qry)
