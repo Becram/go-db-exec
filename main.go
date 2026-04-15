@@ -196,15 +196,15 @@ func resolveReport(reportType string, slowThreshold int, since string) ([]report
 				ORDER BY idx_scan ASC, relname`,
 		},
 		"cache-hit": {
-			title: "Buffer Cache Hit Ratio (cumulative since stats reset)",
+			title: "Buffer Cache Hit Ratio — top 50 by disk reads (cumulative since stats reset)",
 			sql: `
 				SELECT relname AS table,
 				       heap_blks_read AS disk_reads, heap_blks_hit AS cache_hits,
-				       CASE WHEN heap_blks_hit + heap_blks_read = 0 THEN 'N/A'
-				            ELSE round(100.0 * heap_blks_hit / (heap_blks_hit + heap_blks_read), 2)::text || '%'
-				       END AS cache_hit_ratio
+				       round(100.0 * heap_blks_hit / (heap_blks_hit + heap_blks_read), 2)::text || '%' AS cache_hit_ratio
 				FROM pg_statio_user_tables
-				ORDER BY heap_blks_read DESC`,
+				WHERE heap_blks_read + heap_blks_hit > 0
+				ORDER BY heap_blks_read DESC
+				LIMIT 50`,
 		},
 		"bloat": {
 			title: fmt.Sprintf("Table Bloat — vacuumed/analyzed in last %s", since),
