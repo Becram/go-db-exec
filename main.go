@@ -54,6 +54,7 @@ func main() {
 	maxWidth := flag.Int("max-width", 50, "Max display width per cell (0 = no truncation)")
 	slowThreshold := flag.Int("slow-threshold", 5, "Seconds threshold for slow-queries report")
 	timeout := flag.Int("timeout", 300, "Query timeout in seconds (default 300s for reports, use lower value for ad-hoc queries)")
+	since := flag.String("since", "4 hours", "Time window for reports that support it (e.g. '4 hours', '30 minutes', '1 day')")
 	flag.Parse()
 
 	if *showVersion {
@@ -115,7 +116,7 @@ func main() {
 	defer conn.Close()
 
 	if *report != "" {
-		runReport(conn, *report, *slowThreshold, *maxWidth, *timeout)
+		runReport(conn, *report, *slowThreshold, *maxWidth, *timeout, *since)
 	} else {
 		execQuery(conn, dbConfig.Engine, *query, *maxWidth, *timeout)
 	}
@@ -158,22 +159,14 @@ var reportOrder = []string{
 	"slow-queries",
 }
 
-func resolveReport(reportType string, slowThreshold int) ([]reportSection, error) {
+func resolveReport(reportType string, slowThreshold int, since string) ([]reportSection, error) {
 	if reportType == "mysql" {
 		return nil, fmt.Errorf("reports are only supported for PostgreSQL")
 	}
 
-	slow := fmt.Sprintf(`
-		SELECT pid, now() - pg_stat_activity.query_start AS duration, state, query
-		FROM pg_stat_activity
-		WHERE state != 'idle'
-		  AND query_start IS NOT NULL
-		  AND now() - query_start > interval '%d seconds'
-		ORDER BY duration DESC`, slowThreshold)
-
 	all := map[string]reportSection{
 		"table-stats": {
-			title: "Table Read/Write Statistics",
+			title: "Table Read/Write Statistics (cumulative since stats reset)",
 			sql: `
 				SELECT relname AS table,
 				       seq_scan, seq_tup_read AS seq_rows_read,
@@ -183,7 +176,7 @@ func resolveReport(reportType string, slowThreshold int) ([]reportSection, error
 				ORDER BY seq_scan + idx_scan DESC`,
 		},
 		"write-history": {
-			title: "Historical Write Activity (since stats reset)",
+			title: "Historical Write Activity (cumulative since stats reset)",
 			sql: `
 				SELECT relname AS table,
 				       n_tup_ins AS inserts, n_tup_upd AS updates,
@@ -194,7 +187,7 @@ func resolveReport(reportType string, slowThreshold int) ([]reportSection, error
 				ORDER BY n_tup_ins + n_tup_upd + n_tup_del DESC`,
 		},
 		"index-usage": {
-			title: "Index Usage",
+			title: "Index Usage (cumulative since stats reset)",
 			sql: `
 				SELECT relname AS table, indexrelname AS index,
 				       idx_scan AS scans, idx_tup_read AS tuples_read, idx_tup_fetch AS tuples_fetched,
@@ -203,7 +196,7 @@ func resolveReport(reportType string, slowThreshold int) ([]reportSection, error
 				ORDER BY idx_scan ASC, relname`,
 		},
 		"cache-hit": {
-			title: "Buffer Cache Hit Ratio",
+			title: "Buffer Cache Hit Ratio (cumulative since stats reset)",
 			sql: `
 				SELECT relname AS table,
 				       heap_blks_read AS disk_reads, heap_blks_hit AS cache_hits,
@@ -214,19 +207,23 @@ func resolveReport(reportType string, slowThreshold int) ([]reportSection, error
 				ORDER BY heap_blks_read DESC`,
 		},
 		"bloat": {
-			title: "Table Bloat (Dead Tuples)",
-			sql: `
+			title: fmt.Sprintf("Table Bloat — vacuumed/analyzed in last %s", since),
+			sql: fmt.Sprintf(`
 				SELECT relname AS table,
 				       n_live_tup AS live_rows, n_dead_tup AS dead_rows,
 				       CASE WHEN n_live_tup = 0 THEN 'N/A'
-				            ELSE round(100.0 * n_dead_tup / nullif(n_live_tup + n_dead_tup, 0), 2)::text || '%'
+				            ELSE round(100.0 * n_dead_tup / nullif(n_live_tup + n_dead_tup, 0), 2)::text || '%%'
 				       END AS dead_ratio,
 				       last_vacuum, last_autovacuum, last_analyze, last_autoanalyze
 				FROM pg_stat_user_tables
-				ORDER BY n_dead_tup DESC`,
+				WHERE last_autovacuum > now() - interval '%s'
+				   OR last_vacuum     > now() - interval '%s'
+				   OR last_autoanalyze > now() - interval '%s'
+				   OR last_analyze    > now() - interval '%s'
+				ORDER BY n_dead_tup DESC`, since, since, since, since),
 		},
 		"table-size": {
-			title: "Table Sizes",
+			title: "Table Sizes (current)",
 			sql: `
 				SELECT relname AS table,
 				       pg_size_pretty(pg_table_size(relid)) AS table_size,
@@ -237,17 +234,18 @@ func resolveReport(reportType string, slowThreshold int) ([]reportSection, error
 				ORDER BY total_bytes DESC`,
 		},
 		"connections": {
-			title: "Active Connections",
-			sql: `
+			title: fmt.Sprintf("Active Connections — state changed in last %s", since),
+			sql: fmt.Sprintf(`
 				SELECT state, usename AS user, count(*) AS count,
 				       max(now() - state_change)::text AS longest_wait
 				FROM pg_stat_activity
 				WHERE pid <> pg_backend_pid()
+				  AND state_change > now() - interval '%s'
 				GROUP BY state, usename
-				ORDER BY count DESC`,
+				ORDER BY count DESC`, since),
 		},
 		"locks": {
-			title: "Lock Waits",
+			title: "Lock Waits (current)",
 			sql: `
 				SELECT blocked.pid AS blocked_pid,
 				       blocked_activity.usename AS blocked_user,
@@ -263,8 +261,15 @@ func resolveReport(reportType string, slowThreshold int) ([]reportSection, error
 				WHERE NOT blocked.granted`,
 		},
 		"slow-queries": {
-			title: fmt.Sprintf("Slow Queries (running > %ds)", slowThreshold),
-			sql:   slow,
+			title: fmt.Sprintf("Slow Queries — started in last %s, running > %ds", since, slowThreshold),
+			sql: fmt.Sprintf(`
+				SELECT pid, now() - query_start AS duration, state, query
+				FROM pg_stat_activity
+				WHERE state != 'idle'
+				  AND query_start IS NOT NULL
+				  AND query_start > now() - interval '%s'
+				  AND now() - query_start > interval '%d seconds'
+				ORDER BY duration DESC`, since, slowThreshold),
 		},
 	}
 
@@ -283,8 +288,8 @@ func resolveReport(reportType string, slowThreshold int) ([]reportSection, error
 	return []reportSection{s}, nil
 }
 
-func runReport(db *sql.DB, reportType string, slowThreshold, maxWidth, timeout int) {
-	sections, err := resolveReport(reportType, slowThreshold)
+func runReport(db *sql.DB, reportType string, slowThreshold, maxWidth, timeout int, since string) {
+	sections, err := resolveReport(reportType, slowThreshold, since)
 	if err != nil {
 		log.Fatal(err)
 	}
