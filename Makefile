@@ -1,5 +1,7 @@
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
 build:
-	@go build -o db-exec .
+	@go build -ldflags "-X main.version=$(VERSION)" -o db-exec .
 
 deploy: build
 	@mv -v db-exec /usr/local/bin/
