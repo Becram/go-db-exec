@@ -204,7 +204,7 @@ func resolveReport(reportType string, slowThreshold int, since string) ([]report
 				FROM pg_statio_user_tables
 				WHERE heap_blks_read + heap_blks_hit > 0
 				ORDER BY heap_blks_read DESC
-				LIMIT 50`,
+				LIMIT 20`,
 		},
 		"bloat": {
 			title: fmt.Sprintf("Table Bloat — vacuumed/analyzed in last %s", since),
