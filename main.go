@@ -55,6 +55,7 @@ func main() {
 	slowThreshold := flag.Int("slow-threshold", 5, "Seconds threshold for slow-queries report")
 	timeout := flag.Int("timeout", 300, "Query timeout in seconds (default 300s for reports, use lower value for ad-hoc queries)")
 	since := flag.String("since", "4 hours", "Time window for reports that support it (e.g. '4 hours', '30 minutes', '1 day')")
+	force := flag.Bool("force", false, "Skip confirmation prompt for write operations")
 	flag.Parse()
 
 	if *showVersion {
@@ -118,7 +119,7 @@ func main() {
 	if *report != "" {
 		runReport(conn, *report, *slowThreshold, *maxWidth, *timeout, *since)
 	} else {
-		execQuery(conn, dbConfig.Engine, *query, *maxWidth, *timeout)
+		execQuery(conn, dbConfig.Engine, *query, *maxWidth, *timeout, *force)
 	}
 }
 
@@ -347,7 +348,7 @@ func translateMetaCommand(cmd, engine string) (string, error) {
 	}
 }
 
-func execQuery(db *sql.DB, engine, qry string, maxWidth, timeout int) {
+func execQuery(db *sql.DB, engine, qry string, maxWidth, timeout int, force bool) {
 	if strings.HasPrefix(qry, `\`) {
 		translated, err := translateMetaCommand(qry, engine)
 		if err != nil {
@@ -356,7 +357,7 @@ func execQuery(db *sql.DB, engine, qry string, maxWidth, timeout int) {
 		qry = translated
 	}
 
-	if isWriteQuery(qry) {
+	if isWriteQuery(qry) && !force {
 		fmt.Printf("\033[1;33mWarning:\033[0m this is a write operation:\n\n  %s\n\nType 'yes' to confirm: ", qry)
 		scanner := bufio.NewScanner(os.Stdin)
 		scanner.Scan()
